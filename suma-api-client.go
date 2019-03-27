@@ -6,6 +6,7 @@ import (
 
 type clientRef struct {
   Id            int        `xmlrpc:"id"`
+  Name          string     `xmlrpc:"name"`
 }
 
 type clientDetail struct {
@@ -30,17 +31,25 @@ func Logout(host string, token string) (error) {
 }
 
 // Get client list
-func GetClientList(host string, token string) ([]clientRef, error) {
+func ListSystems(host string, token string) ([]clientRef, error) {
   client, _ := xmlrpc.NewClient(host, nil)
   var result []clientRef
   err := client.Call("system.listSystems", token, &result)
   return result, err
 }
 
-// Get client list
-func GetClientDetails(host string, token string, systemId int) (clientDetail, error) {
+// Get client details
+func GetSystemDetails(host string, token string, systemId int) (clientDetail, error) {
   client, _ := xmlrpc.NewClient(host, nil)
   var result clientDetail
   err := client.Call("system.getDetails", []interface{}{token, systemId}, &result)
+  return result, err
+}
+
+// List client FQDNs
+func ListSystemFQDNs(host string, token string, systemId int) ([]string, error) {
+  client, _ := xmlrpc.NewClient(host, nil)
+  var result []string
+  err := client.Call("system.listFqdns", []interface{}{token, systemId}, &result)
   return result, err
 }

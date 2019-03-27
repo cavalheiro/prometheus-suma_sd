@@ -55,8 +55,8 @@ func fatalErrorHandler(e error, msg string) {
   }
 }
 
-// Get a list of SUSEManager client hostnames
-func listSUSEManagerClients(config Config) ([]string, error) {
+// Get a list of SUSEManager client hostnames that have monitoring enabled
+func listMonitoringEntitledFQDNs(config Config) ([]string, error) {
   mgrHost := config.Host
   result := []string{}
   token, err := Login(mgrHost, config.User, config.Pass)
@@ -64,18 +64,29 @@ func listSUSEManagerClients(config Config) ([]string, error) {
     fmt.Printf("ERROR - Unable to login to SUSE Manager API: %v\n", err)
     return nil, err;
   }
-  clientList, err := GetClientList(mgrHost, token)
+  clientList, err := ListSystems(mgrHost, token)
   if err != nil {
-    fmt.Printf("ERROR - Unable to get list of clients: %v\n", err)
+    fmt.Printf("ERROR - Unable to get list of systems: %v\n", err)
     return nil, err;
   }
-  for _, client := range clientList {
-    clientDetails, err := GetClientDetails(mgrHost, token, client.Id)
-    if err != nil {
-      fmt.Printf("ERROR - Unable to get client details: %v\n", err)
-      continue;
+  if len(clientList) == 0 {
+    fmt.Printf("\tFound 0 systems.\n")
+  } else {
+    for _, client := range clientList {
+      details, err := GetSystemDetails(mgrHost, token, client.Id)
+      fqdns, err := ListSystemFQDNs(mgrHost, token, client.Id)
+      if err != nil {
+        fmt.Printf("ERROR - Unable to get system details: %v\n", err)
+        continue;
+      }
+      // Check if system is to be monitored
+      for _, v := range details.Entitlements {
+        if v == "monitoring_entitled" {
+          result = append(result, fqdns[len(fqdns)-1]) // get the last element
+        }
+      }
+      fmt.Printf("\tFound system: %s, %v, FQDNs: %v\n", details.Hostname, details.Entitlements, fqdns)
     }
-    result = append(result, clientDetails.Hostname)
   }
   Logout(mgrHost, token)
   return result, nil
@@ -118,8 +129,11 @@ func generatePromConfig(config Config, hosts []string) (error) {
       }
     }
   }
-  ymlPromConfig, _ := yaml.Marshal(promConfig)
-  return ioutil.WriteFile(config.OutputDir+"/suma-clients.yml", []byte(ymlPromConfig), 0644)
+  ymlPromConfig := []byte{}
+  if len(promConfig) > 0 {
+    ymlPromConfig, _ = yaml.Marshal(promConfig)
+  }
+  return ioutil.WriteFile(config.OutputDir+"/suma-systems.yml", []byte(ymlPromConfig), 0644)
 }
 
 // ------
@@ -146,14 +160,17 @@ func main() {
 
   // Loop infinitely in case there is a pooling internal, run once otherwise
   for {
-    fmt.Printf("Querying SUSE Manager server...\n")
-    hosts, err := listSUSEManagerClients(config)
-    if err != nil {
-      continue; // we want to try in the next iteration, should the error be temporary
-    }
-    err = generatePromConfig(config, hosts)
-    if err != nil {
-      fmt.Printf("ERROR - Unable to write Prometheus config file: %v\n", err)
+    fmt.Printf("Querying SUSE Manager server API...\n")
+    startTime := time.Now()
+    hosts, err := listMonitoringEntitledFQDNs(config)
+    duration := time.Since(startTime)
+    if err == nil {
+      fmt.Printf("\tQuery took: %s\n", duration)
+      err = generatePromConfig(config, hosts)
+      if err != nil {
+        fmt.Printf("ERROR - Unable to write Prometheus config file: %v\n", err)
+      }
+      fmt.Printf("Prometheus scrape target configuration updated.\n")
     }
     if config.PollingInterval > 0 {
       time.Sleep(time.Duration(config.PollingInterval) * time.Second)
