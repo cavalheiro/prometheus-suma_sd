@@ -55,16 +55,17 @@ func fatalErrorHandler(e error, msg string) {
   }
 }
 
+
 // Get a list of SUSEManager client hostnames that have monitoring enabled
 func listMonitoringEntitledFQDNs(config Config) ([]string, error) {
-  mgrHost := config.Host
+  apiUrl := "http://" + config.Host + "/rpc/api"
   result := []string{}
-  token, err := Login(mgrHost, config.User, config.Pass)
+  token, err := Login(apiUrl, config.User, config.Pass)
   if err != nil {
     fmt.Printf("ERROR - Unable to login to SUSE Manager API: %v\n", err)
     return nil, err;
   }
-  clientList, err := ListSystems(mgrHost, token)
+  clientList, err := ListSystems(apiUrl, token)
   if err != nil {
     fmt.Printf("ERROR - Unable to get list of systems: %v\n", err)
     return nil, err;
@@ -73,8 +74,8 @@ func listMonitoringEntitledFQDNs(config Config) ([]string, error) {
     fmt.Printf("\tFound 0 systems.\n")
   } else {
     for _, client := range clientList {
-      details, err := GetSystemDetails(mgrHost, token, client.Id)
-      fqdns, err := ListSystemFQDNs(mgrHost, token, client.Id)
+      details, err := GetSystemDetails(apiUrl, token, client.Id)
+      fqdns, err := ListSystemFQDNs(apiUrl, token, client.Id)
       if err != nil {
         fmt.Printf("ERROR - Unable to get system details: %v\n", err)
         continue;
@@ -85,15 +86,29 @@ func listMonitoringEntitledFQDNs(config Config) ([]string, error) {
           result = append(result, fqdns[len(fqdns)-1]) // get the last element
         }
       }
-      fmt.Printf("\tFound system: %s, %v, FQDNs: %v\n", details.Hostname, details.Entitlements, fqdns)
+      fmt.Printf("\tFound system: %s, %v, FQDN: %v\n", details.Hostname, details.Entitlements, fqdns)
     }
   }
-  Logout(mgrHost, token)
+  Logout(apiUrl, token)
   return result, nil
 }
 
+// Generate Scrape targets for SUMA server
+func writePromConfigForSUMAServer(config Config) (error) {
+  targets := []string{
+    config.Host+":9100", // node_exporeter
+    config.Host+":9187", // postgres_exporter
+    config.Host+":5556", // jmx_exporter tomcat
+    config.Host+":5557", // jmx_exporter taskomatic
+    config.Host+":9800", // suma exporter
+  }
+  promConfig := []PromScrapeGroup{PromScrapeGroup{Targets: targets}}
+  ymlPromConfig, _ := yaml.Marshal(promConfig)
+  return ioutil.WriteFile(config.OutputDir+"/suma-server.yml", []byte(ymlPromConfig), 0644)
+}
+
 // Generate scrape configuration for a given list of hosts
-func generatePromConfig(config Config, hosts []string) (error) {
+func writePromConfigForClientSystems(config Config, hosts []string) (error) {
   promConfig := []PromScrapeGroup{}
   for _, groupConfig := range config.Groups {
     for _, hostConfig := range groupConfig.Hosts {
@@ -158,6 +173,8 @@ func main() {
   fmt.Printf("\tpolling interval: %d seconds\n", config.PollingInterval)
   fmt.Printf("\toutput dir: %v\n", config.OutputDir)
 
+  // Generate config for SUSE Manager server (self-monitoring)
+  writePromConfigForSUMAServer(config)
   // Loop infinitely in case there is a pooling internal, run once otherwise
   for {
     fmt.Printf("Querying SUSE Manager server API...\n")
@@ -166,7 +183,7 @@ func main() {
     duration := time.Since(startTime)
     if err == nil {
       fmt.Printf("\tQuery took: %s\n", duration)
-      err = generatePromConfig(config, hosts)
+      err = writePromConfigForClientSystems(config, hosts)
       if err != nil {
         fmt.Printf("ERROR - Unable to write Prometheus config file: %v\n", err)
       }

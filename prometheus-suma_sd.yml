@@ -1,15 +1,15 @@
 # SUSE Manager host
-host: http://server.tf.local/rpc/api
+host: server.tf.local
 user: admin
 pass: admin
 
 # Polling interval to contact the SUSE Manager server
 # If 0, polling is disabled. Will execute once and exit.
-pollinginterval: 0
+pollinginterval: 60
 
 # Where to write the generated scrape configuration files
 # outputdir: /etc/prometheus/scrape-config/
-outputdir: ./
+outputdir: /etc/prometheus/suma-scrape-config
 
 
 # ----------------------
@@ -19,7 +19,7 @@ outputdir: ./
 groups:
 
 # Add all clients as scrape targets with job label 'suma'
-- labels: { job: suma }
+- labels: { job: suma-systems }
   hosts:
     - match: .*
       ports: [9100]
