@@ -6,7 +6,6 @@ import (
   "fmt"
   "os"
   "time"
-  "regexp"
   "gopkg.in/yaml.v2"
 )
 
@@ -22,24 +21,12 @@ type Config struct {
   Host             string
   User             string
   Pass             string
-  Groups           []GroupConfig
-}
-
-type GroupConfig struct {
-  Labels          map[string]string
-  Hosts           []HostConfig
-}
-
-type HostConfig struct {
-  Match           string
-  Ports           []string
-  Labels          map[string]string
 }
 
 // Result structure
 type PromScrapeGroup struct {
   Targets         []string
-  Labels          map[string]string
+  // Labels          map[string]string
 }
 
 // ------------------
@@ -56,26 +43,27 @@ func fatalErrorHandler(e error, msg string) {
 }
 
 
-// Get a list of SUSEManager client hostnames that have monitoring enabled
-func listMonitoringEntitledFQDNs(config Config) ([]string, error) {
+// Generate Scrape targets for SUMA client systems
+func writePromConfigForClientSystems(config Config) (error) {
   apiUrl := "http://" + config.Host + "/rpc/api"
-  result := []string{}
+  targets := []string{}
   token, err := Login(apiUrl, config.User, config.Pass)
   if err != nil {
     fmt.Printf("ERROR - Unable to login to SUSE Manager API: %v\n", err)
-    return nil, err;
+    return err;
   }
   clientList, err := ListSystems(apiUrl, token)
   if err != nil {
     fmt.Printf("ERROR - Unable to get list of systems: %v\n", err)
-    return nil, err;
+    return err;
   }
   if len(clientList) == 0 {
     fmt.Printf("\tFound 0 systems.\n")
   } else {
     for _, client := range clientList {
+      fqdns := []string{}
+      formulas := formulaData{}
       details, err := GetSystemDetails(apiUrl, token, client.Id)
-      fqdns, err := ListSystemFQDNs(apiUrl, token, client.Id)
       if err != nil {
         fmt.Printf("ERROR - Unable to get system details: %v\n", err)
         continue;
@@ -83,14 +71,23 @@ func listMonitoringEntitledFQDNs(config Config) ([]string, error) {
       // Check if system is to be monitored
       for _, v := range details.Entitlements {
         if v == "monitoring_entitled" {
-          result = append(result, fqdns[len(fqdns)-1]) // get the last element
+          fqdns, err = ListSystemFQDNs(apiUrl, token, client.Id)
+          formulas, err = getSystemFormulaData(apiUrl, token, client.Id, "prometheus-exporters")
+          if (formulas.NodeExporter.Enabled) {
+            targets = append (targets, fqdns[len(fqdns)-1] + ":9100")
+          }
+          if (formulas.PostgresExporter.Enabled) {
+            targets = append (targets, fqdns[len(fqdns)-1] + ":9187")
+          }
         }
       }
-      fmt.Printf("\tFound system: %s, %v, FQDN: %v\n", details.Hostname, details.Entitlements, fqdns)
+      fmt.Printf("\tFound system: %s, %v, FQDN: %v Formulas: %+v\n", details.Hostname, details.Entitlements, fqdns, formulas)
     }
   }
   Logout(apiUrl, token)
-  return result, nil
+  promConfig := []PromScrapeGroup{PromScrapeGroup{Targets: targets}}
+  ymlPromConfig, _ := yaml.Marshal(promConfig)
+  return ioutil.WriteFile(config.OutputDir+"/suma-systems.yml", []byte(ymlPromConfig), 0644)
 }
 
 // Generate Scrape targets for SUMA server
@@ -105,50 +102,6 @@ func writePromConfigForSUMAServer(config Config) (error) {
   promConfig := []PromScrapeGroup{PromScrapeGroup{Targets: targets}}
   ymlPromConfig, _ := yaml.Marshal(promConfig)
   return ioutil.WriteFile(config.OutputDir+"/suma-server.yml", []byte(ymlPromConfig), 0644)
-}
-
-// Generate scrape configuration for a given list of hosts
-func writePromConfigForClientSystems(config Config, hosts []string) (error) {
-  promConfig := []PromScrapeGroup{}
-  for _, groupConfig := range config.Groups {
-    for _, hostConfig := range groupConfig.Hosts {
-      // Declare base structure for prom scrape group
-      promScrapeGroup := PromScrapeGroup{Targets: []string{}, Labels: map[string]string{}}
-      // Build a list of hosts that match with the config regex
-      matchedDomains := func (hosts []string, filterExpr string) ([]string) {
-        result := []string{}
-        for _, host := range hosts {
-          match, _ := regexp.MatchString(filterExpr, host)
-          if match {
-            result = append(result, host)
-          }
-        }
-        return result
-      }(hosts, hostConfig.Match)
-      if len(matchedDomains) > 0 {
-        // Add group labels
-        for k, v := range groupConfig.Labels {
-            promScrapeGroup.Labels[k] = v
-        }
-        // Add domain labels
-        for k, v := range hostConfig.Labels {
-            promScrapeGroup.Labels[k] = v
-        }
-        // Add scrape targets and ports
-        for _, host :=  range matchedDomains {
-          for _, port := range hostConfig.Ports {
-            promScrapeGroup.Targets = append(promScrapeGroup.Targets, host + ":" + port)
-          }
-        }
-        promConfig = append(promConfig, promScrapeGroup)
-      }
-    }
-  }
-  ymlPromConfig := []byte{}
-  if len(promConfig) > 0 {
-    ymlPromConfig, _ = yaml.Marshal(promConfig)
-  }
-  return ioutil.WriteFile(config.OutputDir+"/suma-systems.yml", []byte(ymlPromConfig), 0644)
 }
 
 // ------
@@ -179,14 +132,12 @@ func main() {
   for {
     fmt.Printf("Querying SUSE Manager server API...\n")
     startTime := time.Now()
-    hosts, err := listMonitoringEntitledFQDNs(config)
+    err := writePromConfigForClientSystems(config)
     duration := time.Since(startTime)
-    if err == nil {
+    if err != nil {
+      fmt.Printf("ERROR - Unable to generate config for client systems: %v\n", err)
+    } else  {
       fmt.Printf("\tQuery took: %s\n", duration)
-      err = writePromConfigForClientSystems(config, hosts)
-      if err != nil {
-        fmt.Printf("ERROR - Unable to write Prometheus config file: %v\n", err)
-      }
       fmt.Printf("Prometheus scrape target configuration updated.\n")
     }
     if config.PollingInterval > 0 {

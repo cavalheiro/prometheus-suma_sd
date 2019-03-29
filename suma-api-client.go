@@ -5,14 +5,23 @@ import (
 )
 
 type clientRef struct {
-  Id            int        `xmlrpc:"id"`
-  Name          string     `xmlrpc:"name"`
+  Id                int               `xmlrpc:"id"`
+  Name              string            `xmlrpc:"name"`
 }
 
 type clientDetail struct {
-  Id            int        `xmlrpc:"id"`
-  Hostname      string     `xmlrpc:"hostname"`
-  Entitlements  []string   `xmlrpc:"addon_entitlements"`
+  Id                int               `xmlrpc:"id"`
+  Hostname          string            `xmlrpc:"hostname"`
+  Entitlements      []string          `xmlrpc:"addon_entitlements"`
+}
+
+type exporterConfig struct {
+  Enabled           bool              `xmlrpc:"enabled"`
+}
+
+type formulaData struct {
+  NodeExporter      exporterConfig    `xmlrpc:"node_exporter"`
+  PostgresExporter  exporterConfig    `xmlrpc:"postgres_exporter"`
 }
 
 // Attempt to login in SUSE Manager Server and get an auth token
@@ -51,5 +60,13 @@ func ListSystemFQDNs(host string, token string, systemId int) ([]string, error) 
   client, _ := xmlrpc.NewClient(host, nil)
   var result []string
   err := client.Call("system.listFqdns", []interface{}{token, systemId}, &result)
+  return result, err
+}
+
+// Get formula data for a given system
+func getSystemFormulaData(host string, token string, systemId int, formulaName string) (formulaData, error) {
+  client, _ := xmlrpc.NewClient(host, nil)
+  var result formulaData
+  err := client.Call("formula.getSystemFormulaData", []interface{}{token, systemId, formulaName}, &result)
   return result, err
 }
