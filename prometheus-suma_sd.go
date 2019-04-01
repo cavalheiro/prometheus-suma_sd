@@ -26,7 +26,7 @@ type Config struct {
 // Result structure
 type PromScrapeGroup struct {
   Targets         []string
-  // Labels          map[string]string
+  Labels          map[string]string
 }
 
 // ------------------
@@ -46,7 +46,7 @@ func fatalErrorHandler(e error, msg string) {
 // Generate Scrape targets for SUMA client systems
 func writePromConfigForClientSystems(config Config) (error) {
   apiUrl := "http://" + config.Host + "/rpc/api"
-  targets := []string{}
+  scrapeGroups := []PromScrapeGroup{}
   token, err := Login(apiUrl, config.User, config.Pass)
   if err != nil {
     fmt.Printf("ERROR - Unable to login to SUSE Manager API: %v\n", err)
@@ -74,10 +74,14 @@ func writePromConfigForClientSystems(config Config) (error) {
           fqdns, err = ListSystemFQDNs(apiUrl, token, client.Id)
           formulas, err = getSystemFormulaData(apiUrl, token, client.Id, "prometheus-exporters")
           if (formulas.NodeExporter.Enabled) {
-            targets = append (targets, fqdns[len(fqdns)-1] + ":9100")
+            scrapeGroups = append (scrapeGroups, PromScrapeGroup{
+              Targets: []string{fqdns[len(fqdns)-1] + ":9100"},
+            })
           }
           if (formulas.PostgresExporter.Enabled) {
-            targets = append (targets, fqdns[len(fqdns)-1] + ":9187")
+            scrapeGroups = append (scrapeGroups, PromScrapeGroup{
+              Targets: []string{fqdns[len(fqdns)-1] + ":9187"}, Labels: map[string]string{"role" : "postgres"},
+            })
           }
         }
       }
@@ -85,21 +89,26 @@ func writePromConfigForClientSystems(config Config) (error) {
     }
   }
   Logout(apiUrl, token)
-  promConfig := []PromScrapeGroup{PromScrapeGroup{Targets: targets}}
-  ymlPromConfig, _ := yaml.Marshal(promConfig)
+  ymlPromConfig := []byte{}
+  if len (scrapeGroups) > 0 {
+    ymlPromConfig, _ = yaml.Marshal(scrapeGroups)
+  }
   return ioutil.WriteFile(config.OutputDir+"/suma-systems.yml", []byte(ymlPromConfig), 0644)
 }
 
 // Generate Scrape targets for SUMA server
 func writePromConfigForSUMAServer(config Config) (error) {
-  targets := []string{
-    config.Host+":9100", // node_exporeter
-    config.Host+":9187", // postgres_exporter
-    config.Host+":5556", // jmx_exporter tomcat
-    config.Host+":5557", // jmx_exporter taskomatic
-    config.Host+":9800", // suma exporter
+  promConfig := []PromScrapeGroup{
+    PromScrapeGroup{Targets: []string{
+      config.Host+":9100", // node_exporeter
+      config.Host+":5556", // jmx_exporter tomcat
+      config.Host+":5557", // jmx_exporter taskomatic
+      config.Host+":9800", // suma exporter
+    }},
+    PromScrapeGroup{Targets: []string{
+      config.Host+":9187",
+    }, Labels: map[string]string{"role" : "postgres"}},
   }
-  promConfig := []PromScrapeGroup{PromScrapeGroup{Targets: targets}}
   ymlPromConfig, _ := yaml.Marshal(promConfig)
   return ioutil.WriteFile(config.OutputDir+"/suma-server.yml", []byte(ymlPromConfig), 0644)
 }
